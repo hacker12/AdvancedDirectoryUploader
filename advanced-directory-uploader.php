@@ -2,7 +2,7 @@
 /*
 Plugin Name: Advanced Directory Uploader
 Description: Enables administrators to upload a ZIP file containing directories and files, checks for existing files, and prevents overwriting files while allowing directory merging.
-Version: 1.1
+Version: 1.2
 Author: Morgän Attias
 License: GPL-3.0
 */
@@ -56,7 +56,8 @@ class AdvancedDirectoryUploader {
         if ($hook !== 'media_page_advanced-directory-uploader') {
             return;
         }
-        wp_enqueue_script('adu-script', plugin_dir_url(__FILE__) . 'js/adu-script.js', array('jquery'), '1.1', true);
+        wp_enqueue_script('adu-script', plugin_dir_url(__FILE__) . 'js/adu-script.js', array('jquery'), '1.2', true);
+        wp_enqueue_style('adu-style', plugin_dir_url(__FILE__) . 'css/adu-style.css', array(), '1.2');
     }
 
     public function render_admin_page() {
@@ -103,7 +104,9 @@ class AdvancedDirectoryUploader {
             </div>
 
             <h2>Directory Listing</h2>
-            <?php $this->display_directory_listing(); ?>
+            <div id="adu-directory-listing">
+                <?php $this->display_directory_listing(); ?>
+            </div>
         </div>
         <?php
     }
@@ -159,7 +162,6 @@ class AdvancedDirectoryUploader {
             $overwrite = isset($_POST['allow_overwrite']) ? true : false;
             $added_files = array();
             $skipped_files = array();
-            $existing_files = array();
 
             // Extract files
             for ($i = 0; $i < $zip->numFiles; $i++) {
@@ -323,9 +325,13 @@ class AdvancedDirectoryUploader {
         $upload_dir = wp_upload_dir();
         $target_dir = trailingslashit($upload_dir['basedir']) . $this->target_directory;
 
-        echo '<pre>';
-        $this->list_files($target_dir, $this->target_directory);
-        echo '</pre>';
+        if (is_dir($target_dir)) {
+            echo '<ul class="adu-tree">';
+            $this->list_files($target_dir, $this->target_directory);
+            echo '</ul>';
+        } else {
+            echo 'Directory does not exist.';
+        }
     }
 
     private function list_files($dir, $relative_path = '') {
@@ -338,14 +344,14 @@ class AdvancedDirectoryUploader {
                 $path = $dir . '/' . $file;
                 $relative_file = $relative_path . '/' . $file;
                 if (is_dir($path)) {
-                    echo '<strong>[' . esc_html($relative_file) . ']</strong><br>';
+                    echo '<li class="adu-folder"><span class="adu-toggle">[+]</span> <strong>' . esc_html($file) . '</strong>';
+                    echo '<ul class="adu-nested">';
                     $this->list_files($path, $relative_file);
+                    echo '</ul></li>';
                 } else {
-                    echo esc_html($relative_file) . '<br>';
+                    echo '<li class="adu-file">' . esc_html($file) . '</li>';
                 }
             }
-        } else {
-            echo 'Directory does not exist.';
         }
     }
 }
