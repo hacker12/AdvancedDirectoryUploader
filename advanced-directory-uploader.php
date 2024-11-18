@@ -1,8 +1,8 @@
 <?php
 /*
 Plugin Name: Advanced Directory Uploader
-Description: Enables administrators to upload a ZIP file containing directories and files, with collision detection and overwrite options.
-Version: 1.0
+Description: Enables administrators to upload a ZIP file containing directories and files, checks for existing files, and prevents overwriting files while allowing directory merging.
+Version: 1.1
 Author: Morgän Attias
 License: GPL-3.0
 */
@@ -56,7 +56,7 @@ class AdvancedDirectoryUploader {
         if ($hook !== 'media_page_advanced-directory-uploader') {
             return;
         }
-        wp_enqueue_script('adu-script', plugin_dir_url(__FILE__) . 'js/adu-script.js', array('jquery'), '1.0', true);
+        wp_enqueue_script('adu-script', plugin_dir_url(__FILE__) . 'js/adu-script.js', array('jquery'), '1.1', true);
     }
 
     public function render_admin_page() {
@@ -89,7 +89,7 @@ class AdvancedDirectoryUploader {
                         <th scope="row"><label for="allow_overwrite">Allow Overwrite</label></th>
                         <td>
                             <input type="checkbox" name="allow_overwrite" id="allow_overwrite" value="1" <?php echo $overwrite_checked; ?>>
-                            <span class="description">Overwrite existing files if they already exist.</span>
+                            <span class="description">Allow overwriting existing files.</span>
                         </td>
                     </tr>
                 </table>
@@ -101,6 +101,9 @@ class AdvancedDirectoryUploader {
                     <div id="adu-progress-bar-fill" style="width: 0%; height: 30px; background-color: #4caf50;"></div>
                 </div>
             </div>
+
+            <h2>Directory Listing</h2>
+            <?php $this->display_directory_listing(); ?>
         </div>
         <?php
     }
@@ -154,50 +157,66 @@ class AdvancedDirectoryUploader {
         $zip = new ZipArchive;
         if ($zip->open($uploaded_zip) === TRUE) {
             $overwrite = isset($_POST['allow_overwrite']) ? true : false;
-            $collision_files = array();
-            $new_files = array();
+            $added_files = array();
+            $skipped_files = array();
+            $existing_files = array();
 
-            // Check for existing files
+            // Extract files
             for ($i = 0; $i < $zip->numFiles; $i++) {
                 $filename = $zip->getNameIndex($i);
-                $filepath = $target_dir . $filename;
+                $source = $zip->getStream($filename);
+                $target_path = $target_dir . $filename;
 
-                if (file_exists($filepath)) {
-                    $collision_files[] = $filename;
-                } else {
-                    $new_files[] = $filename;
+                // Skip extraction for directories
+                if (substr($filename, -1) === '/') {
+                    if (!file_exists($target_path)) {
+                        mkdir($target_path, 0755, true);
+                    }
+                    continue;
                 }
+
+                // Create directories if they don't exist
+                $dir = dirname($target_path);
+                if (!file_exists($dir)) {
+                    mkdir($dir, 0755, true);
+                }
+
+                // Check if file exists
+                if (file_exists($target_path)) {
+                    if ($overwrite) {
+                        // Overwrite the file
+                        file_put_contents($target_path, stream_get_contents($source));
+                        $added_files[] = $filename;
+                    } else {
+                        // Skip the file
+                        $skipped_files[] = $filename;
+                    }
+                } else {
+                    // Add new file
+                    file_put_contents($target_path, stream_get_contents($source));
+                    $added_files[] = $filename;
+                }
+                fclose($source);
             }
 
-            // Handle collisions
-            if (count($collision_files) > 0 && !$overwrite) {
-                // Close zip and delete uploaded file
-                $zip->close();
-                unlink($uploaded_zip);
+            $zip->close();
 
-                wp_redirect(add_query_arg('adu_error', 'collision_detected', wp_get_referer()));
-                exit;
-            } else {
-                // Extract files
-                $zip->extractTo($target_dir);
-                $zip->close();
+            // Delete the uploaded ZIP file
+            unlink($uploaded_zip);
 
-                // Delete the uploaded ZIP file
-                unlink($uploaded_zip);
+            // Prepare summary data
+            $summary = array(
+                'added_files' => $added_files,
+                'skipped_files' => $skipped_files,
+            );
 
-                // Prepare summary data
-                $summary = array(
-                    'overwritten_files' => $collision_files,
-                    'new_files' => $new_files,
-                );
+            // Redirect with success message and summary
+            wp_redirect(add_query_arg(array(
+                'adu_success' => 'upload_complete',
+                'adu_summary' => urlencode(json_encode($summary)),
+            ), wp_get_referer()));
+            exit;
 
-                // Redirect with success message and summary
-                wp_redirect(add_query_arg(array(
-                    'adu_success' => 'upload_complete',
-                    'adu_summary' => urlencode(json_encode($summary)),
-                ), wp_get_referer()));
-                exit;
-            }
         } else {
             // Extraction failed
             unlink($uploaded_zip);
@@ -264,7 +283,6 @@ class AdvancedDirectoryUploader {
             'invalid_file_type' => 'Invalid file type. Only ZIP files are permitted.',
             'upload_error' => 'An error occurred during file upload.',
             'extraction_error' => 'Failed to extract the ZIP file.',
-            'collision_detected' => 'Existing files conflict with the uploaded files. Enable overwrite to proceed.',
         );
 
         if (isset($messages[$error_code])) {
@@ -281,16 +299,16 @@ class AdvancedDirectoryUploader {
                 if ($summary) {
                     echo '<h2>Upload Summary</h2>';
                     echo '<ul>';
-                    if (!empty($summary['overwritten_files'])) {
-                        echo '<li><strong>Overwritten Files:</strong><ul>';
-                        foreach ($summary['overwritten_files'] as $file) {
+                    if (!empty($summary['added_files'])) {
+                        echo '<li><strong>Added Files:</strong><ul>';
+                        foreach ($summary['added_files'] as $file) {
                             echo '<li>' . esc_html($file) . '</li>';
                         }
                         echo '</ul></li>';
                     }
-                    if (!empty($summary['new_files'])) {
-                        echo '<li><strong>New Files:</strong><ul>';
-                        foreach ($summary['new_files'] as $file) {
+                    if (!empty($summary['skipped_files'])) {
+                        echo '<li><strong>Skipped Files (already exist):</strong><ul>';
+                        foreach ($summary['skipped_files'] as $file) {
                             echo '<li>' . esc_html($file) . '</li>';
                         }
                         echo '</ul></li>';
@@ -298,6 +316,36 @@ class AdvancedDirectoryUploader {
                     echo '</ul>';
                 }
             }
+        }
+    }
+
+    private function display_directory_listing() {
+        $upload_dir = wp_upload_dir();
+        $target_dir = trailingslashit($upload_dir['basedir']) . $this->target_directory;
+
+        echo '<pre>';
+        $this->list_files($target_dir, $this->target_directory);
+        echo '</pre>';
+    }
+
+    private function list_files($dir, $relative_path = '') {
+        if (is_dir($dir)) {
+            $files = scandir($dir);
+            foreach ($files as $file) {
+                if ($file === '.' || $file === '..') {
+                    continue;
+                }
+                $path = $dir . '/' . $file;
+                $relative_file = $relative_path . '/' . $file;
+                if (is_dir($path)) {
+                    echo '<strong>[' . esc_html($relative_file) . ']</strong><br>';
+                    $this->list_files($path, $relative_file);
+                } else {
+                    echo esc_html($relative_file) . '<br>';
+                }
+            }
+        } else {
+            echo 'Directory does not exist.';
         }
     }
 }
